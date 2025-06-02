@@ -23,60 +23,72 @@ export default class BrowserFunc {
      * Navigate the provided page to rewards homepage
      * @param {Page} page Playwright page
     */
-    async goHome(page: Page) {
+async goHome(page: Page) {
+    const maxAttempts = 3 // Retry up to 3 full goHome attempts
+    let attempt = 0
 
+    while (attempt <= maxAttempts) {
         try {
+        attempt++
             const dashboardURL = new URL(this.bot.config.baseURL)
 
-            if (page.url() === dashboardURL.href) {
-                return
-            }
+            if (page.url() === dashboardURL.href) return
 
             await page.goto(this.bot.config.baseURL)
 
-            const maxIterations = 5 // Maximum iterations set to 5
+            const maxIterations = 5
 
             for (let iteration = 1; iteration <= maxIterations; iteration++) {
                 await this.bot.utils.wait(3000)
                 await this.bot.browser.utils.tryDismissAllMessages(page)
 
-                // Check if account is suspended
-                const isSuspended = await page.waitForSelector('#suspendedAccountHeader', { state: 'visible', timeout: 2000 }).then(() => true).catch(() => false)
+                const isSuspended = await page
+                    .waitForSelector('#suspendedAccountHeader', { state: 'visible', timeout: 2000 })
+                    .then(() => true)
+                    .catch(() => false)
+
                 if (isSuspended) {
                     this.bot.log(this.bot.isMobile, 'GO-HOME', 'This account is suspended!', 'error')
                     throw new Error('Account has been suspended!')
                 }
 
                 try {
-                    // If activities are found, exit the loop
                     await page.waitForSelector('#more-activities', { timeout: 1000 })
                     this.bot.log(this.bot.isMobile, 'GO-HOME', 'Visited homepage successfully')
-                    break
-
-                } catch (error) {
-                    // Continue if element is not found
+                    return
+                } catch {
+                    //
                 }
 
-                // Below runs if the homepage was unable to be visited
                 const currentURL = new URL(page.url())
 
                 if (currentURL.hostname !== dashboardURL.hostname) {
                     await this.bot.browser.utils.tryDismissAllMessages(page)
-
                     await this.bot.utils.wait(2000)
                     await page.goto(this.bot.config.baseURL)
                 } else {
                     this.bot.log(this.bot.isMobile, 'GO-HOME', 'Visited homepage successfully')
-                    break
+                    return
                 }
 
                 await this.bot.utils.wait(5000)
             }
 
+            // If we exit the loop without success
+            throw new Error('Failed to reach home after iterations')
+
         } catch (error) {
-            throw this.bot.log(this.bot.isMobile, 'GO-HOME', 'An error occurred:' + error, 'error')
+            this.bot.log(this.bot.isMobile, 'GO-HOME', `Attempt ${attempt}/${maxAttempts} failed: ${error}`, 'error')
+            
+            if (attempt === maxAttempts) {
+                throw new Error(`goHome failed after ${maxAttempts} attempts`)
+            }
+            
+            this.bot.log(this.bot.isMobile, 'GO-HOME', 'Retrying to go to the reward homepage', 'log')
+            await this.bot.utils.wait(30000)
         }
     }
+}
 
     /**
      * Fetch user dashboard data
@@ -85,6 +97,11 @@ export default class BrowserFunc {
     async getDashboardData(): Promise<DashboardData> {
         const dashboardURL = new URL(this.bot.config.baseURL)
         const currentURL = new URL(this.bot.homePage.url())
+        const maxRetries = this.bot.config.retries.fetchDashboardData.maxAttempts || 3
+        const minDelay = this.bot.utils.stringToMs(this.bot.config.retries.fetchDashboardData.minDelay)
+        const maxDelay = this.bot.utils.stringToMs(this.bot.config.retries.fetchDashboardData.maxDelay)
+        let lastError = null
+        let attempt = 0
 
         try {
             // Should never happen since tasks are opened in a new tab!
@@ -92,38 +109,53 @@ export default class BrowserFunc {
                 this.bot.log(this.bot.isMobile, 'DASHBOARD-DATA', 'Provided page did not equal dashboard page, redirecting to dashboard page')
                 await this.goHome(this.bot.homePage)
             }
+            
+            // Retry logic for fetching dashboard data
+            while(attempt < maxRetries) {
+                // Reload the page to get new data
+                try {
+                    attempt++
+                    await this.bot.homePage.reload({ waitUntil: 'domcontentloaded' })
 
-            // Reload the page to get new data
-            await this.bot.homePage.reload({ waitUntil: 'domcontentloaded' })
+                    const scriptContent = await this.bot.homePage.evaluate(() => {
+                        const scripts = Array.from(document.querySelectorAll('script'))
+                        const targetScript = scripts.find(script => script.innerText.includes('var dashboard'))
 
-            const scriptContent = await this.bot.homePage.evaluate(() => {
-                const scripts = Array.from(document.querySelectorAll('script'))
-                const targetScript = scripts.find(script => script.innerText.includes('var dashboard'))
+                        return targetScript?.innerText ? targetScript.innerText : null
+                    })
 
-                return targetScript?.innerText ? targetScript.innerText : null
-            })
+                    if (!scriptContent) {
+                        throw this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Dashboard page is loaded, but dashboard data not found within script', 'error')
+                    }
 
-            if (!scriptContent) {
-                throw this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Dashboard data not found within script', 'error')
-            }
+                    // Extract the dashboard object from the script content
+                    const dashboardData = await this.bot.homePage.evaluate(scriptContent => {
+                        // Extract the dashboard object using regex
+                        const regex = /var dashboard = (\{.*?\});/s
+                        const match = regex.exec(scriptContent)
 
-            // Extract the dashboard object from the script content
-            const dashboardData = await this.bot.homePage.evaluate(scriptContent => {
-                // Extract the dashboard object using regex
-                const regex = /var dashboard = (\{.*?\});/s
-                const match = regex.exec(scriptContent)
+                        if (match && match[1]) {
+                            return JSON.parse(match[1])
+                        }
 
-                if (match && match[1]) {
-                    return JSON.parse(match[1])
+                    }, scriptContent)
+
+                    if (!dashboardData) {
+                        throw this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Dashboard page is loaded, but unable to parse dashboard script', 'error')
+                    }
+
+                    return dashboardData
+                } catch (error) {
+                    lastError = error
+                    this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', `Failed to fetch dashboard page: ${error}`, 'error')
+                    if (attempt < maxRetries - 1) {
+                        this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', `Retrying to fetch dashboard page ${attempt}/${maxRetries}`, 'log')
+                        await this.bot.utils.wait(Math.floor(this.bot.utils.randomNumber(minDelay, maxDelay)))
+                    }
                 }
 
-            }, scriptContent)
-
-            if (!dashboardData) {
-                throw this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', 'Unable to parse dashboard script', 'error')
             }
-
-            return dashboardData
+            throw this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', `Failed after ${maxRetries} attempts. Last error: ${lastError}`, 'error')
 
         } catch (error) {
             throw this.bot.log(this.bot.isMobile, 'GET-DASHBOARD-DATA', `Error fetching dashboard data: ${error}`, 'error')

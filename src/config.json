@@ -6,8 +6,8 @@
     "runOnZeroPoints": false,
     "clusters": 1,
     "saveFingerprint": {
-        "mobile": false,
-        "desktop": false
+        "mobile": true,
+        "desktop": true
     },
     "workers": {
         "doDailySet": true,
@@ -21,7 +21,7 @@
     "searchOnBingLocalQueries": false,
     "globalTimeout": "30s",
     "searchSettings": {
-        "useGeoLocaleQueries": false,
+        "useGeoLocaleQueries": true,
         "scrollRandomResults": true,
         "clickRandomResults": true,
         "searchDelay": {
@@ -43,5 +43,12 @@
     "webhook": {
         "enabled": false,
         "url": ""
+    },
+    "retries": {
+        "fetchDashboardData": {
+            "maxAttempts": 8,
+            "minDelay": "1m",
+            "maxDelay": "2m"
+        }
     }
 }

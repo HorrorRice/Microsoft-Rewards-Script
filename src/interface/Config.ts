@@ -14,6 +14,7 @@ export interface Config {
     webhookLogExcludeFunc: string[];
     proxy: ConfigProxy;
     webhook: ConfigWebhook;
+    retries: ConfigRetries;
 }
 
 export interface ConfigSaveFingerprint {
@@ -52,4 +53,14 @@ export interface ConfigWorkers {
     doMobileSearch: boolean;
     doDailyCheckIn: boolean;
     doReadToEarn: boolean;
+}
+
+export interface ConfigRetries {
+    fetchDashboardData: ConfigRetriesFetchDashboardData;
+}
+
+export interface ConfigRetriesFetchDashboardData {
+    maxAttempts: number;
+    minDelay: number | string;
+    maxDelay: number | string;
 }
